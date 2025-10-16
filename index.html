@@ -1,0 +1,1684 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>多人作文平台</title>
+    <!-- 載入 Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- 載入 Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@100..900&family=Noto+Sans+TC:wght@400;500;700&family=Noto+Serif+TC:wght@400;500;700&display=swap" rel="stylesheet">
+    <!-- 載入 Tesseract.js 進行圖像 OCR (文字識別) -->
+    <script src='https://unpkg.com/tesseract.js@4.1.0/dist/tesseract.min.js'></script> 
+
+    <!-- 載入 Firebase SDKs -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, createUserWithEmailAndPassword, signInWithEmailAndPassword, onAuthStateChanged, signOut, updateProfile } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, collection, addDoc, onSnapshot, query, deleteDoc, getDocs, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        import { setLogLevel } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+        setLogLevel('Debug'); // 開啟 Firestore 偵錯日誌
+
+        // 將 Firebase 函數掛載到 window 物件上，以便在主腳本中存取
+        window.firebase = {
+            initializeApp,
+            getAuth,
+            createUserWithEmailAndPassword,
+            signInWithEmailAndPassword,
+            onAuthStateChanged,
+            signOut,
+            updateProfile,
+            getFirestore,
+            doc,
+            setDoc,
+            getDoc,
+            collection,
+            addDoc,
+            onSnapshot,
+            query,
+            deleteDoc,
+            getDocs,
+            writeBatch
+        };
+    </script>
+    <style>
+        /* 使用 'Inter' 和 'Noto Sans TC' 作為主要字體 */
+        body {
+            font-family: 'Inter', 'Noto Sans TC', sans-serif;
+            background-color: #f8fafc; /* 淺藍灰背景 */
+        }
+        
+        /* 稿紙網格樣式 (基於 20x20) */
+        .manuscript-grid {
+            display: grid;
+            width: 100%;
+            aspect-ratio: 1 / 1; /* 保持正方形容器 */
+            max-width: 900px; 
+            margin: 0 auto;
+            /* 外部深綠邊框 (Tailwind emerald-900) */
+            border: 2px solid #064e3b; 
+        }
+
+        /* 橫式書寫模式 */
+        .horizontal-mode {
+            grid-template-columns: repeat(20, 1fr);
+            grid-template-rows: repeat(20, 1fr); 
+            writing-mode: horizontal-tb;
+            grid-auto-flow: row;
+        }
+
+        /* 直式書寫模式 */
+        .vertical-mode {
+            grid-template-columns: repeat(20, 1fr);
+            grid-template-rows: repeat(20, 1fr);
+        }
+
+        /* 網格單元格樣式 */
+        .grid-cell {
+            aspect-ratio: 1 / 1;
+            border-right: 1px dashed #34d399; 
+            border-bottom: 1px dashed #34d399; 
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-size: clamp(0.8rem, 1.8vw, 1.2rem);
+            font-family: 'Noto Serif TC', serif; /* 將稿紙字體改為 Google Fonts 的 Noto Serif TC */
+            line-height: 1;
+            padding: 2px;
+            overflow: hidden;
+            user-select: text; 
+            cursor: text;
+            text-align: center;
+            color: #333;
+            transition: background-color: 0.1s;
+            outline: none;
+            writing-mode: horizontal-tb;
+        }
+        
+        .vertical-mode .grid-cell {
+            writing-mode: vertical-rl;
+        }
+        
+        .grid-cell[contenteditable="false"] {
+            cursor: default;
+            background-color: #f1f5f9;
+        }
+
+        /* 移除邊緣多餘的邊框 */
+        .horizontal-mode .grid-cell:nth-child(20n) { border-right: none; }
+        .horizontal-mode .grid-cell:nth-last-child(-n + 20) { border-bottom: none; }
+        .vertical-mode .grid-cell[style*="grid-column: '1'"] { border-right: none; }
+        .vertical-mode .grid-cell[style*="grid-row: '20'"] { border-bottom: none; }
+
+        .grid-cell:focus {
+            background-color: #e0f2fe;
+            outline: 2px solid #3b82f6;
+        }
+
+        /* 按鈕樣式 */
+        .btn {
+            @apply px-4 py-2 mx-1 rounded-lg transition duration-200 ease-in-out font-medium shadow-md;
+        }
+        .btn-page {
+            @apply btn bg-white text-gray-700 border-4 border-transparent hover:bg-gray-100;
+        }
+        .btn-page.active {
+            @apply bg-blue-700 text-white shadow-xl ring-4 ring-blue-300; 
+            border-color: #3b82f6 !important;
+            border-width: 4px !important; 
+        }
+        .btn-action { @apply btn bg-yellow-500 text-white hover:bg-yellow-600; }
+        .btn-undo-redo { @apply btn bg-blue-500 text-white hover:bg-blue-600 disabled:bg-gray-400 disabled:cursor-not-allowed; }
+
+        /* AI 批改結果專用樣式 */
+        .critique-section { @apply mt-4 p-4 border border-indigo-200 bg-indigo-50 rounded-lg; }
+        .critique-title { @apply text-lg font-semibold text-indigo-700 mb-2 border-b border-indigo-300 pb-1; }
+        .critique-score { @apply text-md font-bold text-gray-700; }
+    </style>
+</head>
+<body class="p-4 sm:p-8">
+
+    <!-- 登入/註冊頁面 -->
+    <div id="auth-page" class="hidden max-w-md mx-auto mt-10">
+        <div class="bg-white p-8 rounded-xl shadow-2xl border border-gray-200">
+            <!-- 登入表單 -->
+            <div id="login-form">
+                <h2 class="text-3xl font-bold text-center mb-6 text-gray-800">登入平台</h2>
+                <div class="space-y-4">
+                    <input type="email" id="login-email" placeholder="電子郵件" class="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    <input type="password" id="login-password" placeholder="密碼" class="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500">
+                    <div class="flex items-center">
+                        <input id="remember-me" name="remember-me" type="checkbox" class="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded">
+                        <label for="remember-me" class="ml-2 block text-sm text-gray-900">記住帳號密碼</label>
+                    </div>
+                    <button id="btn-login" class="w-full btn bg-blue-600 text-white hover:bg-blue-700">登入</button>
+                    <p id="login-error" class="text-red-500 text-sm text-center h-4"></p>
+                </div>
+                <p class="text-center mt-4 text-sm">
+                    還沒有帳號？ <button id="show-register-form" class="text-blue-600 hover:underline">馬上註冊</button>
+                </p>
+            </div>
+            <!-- 註冊表單 -->
+            <div id="register-form" class="hidden">
+                <h2 class="text-3xl font-bold text-center mb-6 text-gray-800">註冊新帳號</h2>
+                <div class="space-y-4">
+                    <input type="text" id="register-name" placeholder="作者名稱" class="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500">
+                    <input type="email" id="register-email" placeholder="電子郵件" class="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500">
+                    <input type="password" id="register-password" placeholder="密碼 (至少6位數)" class="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-green-500">
+                    <button id="btn-register" class="w-full btn bg-green-600 text-white hover:bg-green-700">註冊</button>
+                    <p id="register-error" class="text-red-500 text-sm text-center h-4"></p>
+                </div>
+                <p class="text-center mt-4 text-sm">
+                    已經有帳號了？ <button id="show-login-form" class="text-green-600 hover:underline">直接登入</button>
+                </p>
+            </div>
+        </div>
+    </div>
+
+    <!-- 首頁 (初始顯示) -->
+    <div id="home-page" class="hidden max-w-4xl mx-auto">
+         <div class="flex justify-between items-center mb-8">
+            <h1 class="text-4xl font-bold text-gray-800">多人作文平台</h1>
+            <div class="text-right">
+                <p id="user-display" class="text-gray-700"></p>
+                <button id="btn-logout" class="text-sm text-red-500 hover:underline">登出</button>
+            </div>
+        </div>
+        <div class="text-center mb-10">
+            <button id="btn-create-new" class="btn bg-green-600 text-white hover:bg-green-700 text-lg px-8 py-3 rounded-xl shadow-lg transform hover:scale-105 transition-transform">
+                我要寫作文
+            </button>
+        </div>
+        
+        <div class="bg-white p-6 sm:p-8 rounded-xl shadow-xl border border-gray-200">
+            <div class="flex justify-between items-center border-b pb-3 mb-4">
+                 <h2 class="text-2xl font-semibold text-gray-700">作文列表</h2>
+                 <div id="admin-controls" class="hidden flex-shrink-0 space-x-2">
+                    <button id="btn-settings" class="btn bg-gray-500 text-white text-sm p-2">權限設定</button>
+                    <button id="btn-import" class="btn bg-blue-500 text-white text-sm p-2">匯入資料</button>
+                    <button id="btn-export" class="btn bg-green-500 text-white text-sm p-2">匯出資料</button>
+                    <button id="btn-clear-all" class="btn bg-red-600 text-white text-sm p-2">清空所有資料</button>
+                    <input type="file" id="import-file-input" class="hidden" accept=".json">
+                </div>
+            </div>
+            <div id="essay-list-container" class="space-y-4 max-h-[60vh] overflow-y-auto pr-2">
+                <!-- 作文列表將由 JavaScript 填充 -->
+            </div>
+            <div id="pagination-controls" class="flex justify-center items-center mt-6 space-x-2"></div>
+        </div>
+    </div>
+
+    <!-- 編輯器頁面 (初始隱藏) -->
+    <div id="editor-page" class="hidden">
+        <div class="max-w-7xl mx-auto">
+            <div class="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-4">
+                 <h2 id="essay-title-display" class="text-xl sm:text-2xl font-semibold text-gray-700 mb-2 sm:mb-0"></h2>
+                 <div>
+                    <button id="btn-view-critique" class="hidden btn bg-purple-600 text-white hover:bg-purple-700">查看批改結果</button>
+                    <button id="btn-back-to-home" class="btn bg-gray-500 text-white hover:bg-gray-600">返回首頁</button>
+                 </div>
+            </div>
+            <!-- 頂部控制區 -->
+            <div id="editor-controls" class="flex flex-wrap justify-center p-4 mb-6 space-y-4 sm:space-y-0 sm:space-x-4 bg-gray-100 rounded-xl shadow-inner">
+                <div class="flex items-center space-x-4 p-2 bg-white rounded-lg shadow-inner border border-gray-300">
+                    <label class="text-sm font-medium text-gray-700">書寫模式:</label>
+                    <div class="flex space-x-2">
+                        <label class="flex items-center cursor-pointer"><input type="radio" name="writing-mode" value="horizontal" checked class="form-radio text-blue-500 h-4 w-4" onclick="setWritingMode('horizontal')"><span class="ml-2 text-sm text-gray-700">橫式</span></label>
+                        <label class="flex items-center cursor-pointer"><input type="radio" name="writing-mode" value="vertical" class="form-radio text-blue-500 h-4 w-4" onclick="setWritingMode('vertical')"><span class="ml-2 text-sm text-gray-700">直式</span></label>
+                    </div>
+                </div>
+                <div id="page-controls" class="flex flex-wrap justify-center space-x-4">
+                    <button id="btn-page-1" data-page="1" class="btn-page mx-0">第一頁</button>
+                    <button id="btn-page-2" data-page="2" class="btn-page mx-0">第二頁</button>
+                    <button id="btn-page-3" data-page="3" class="btn-page mx-0">第三頁</button>
+                    <button id="btn-page-4" data-page="4" class="btn-page mx-0">第四頁</button>
+                </div>
+                <div id="action-buttons" class="flex flex-wrap justify-center space-x-3">
+                    <button id="btn-undo" class="btn-undo-redo" disabled>復原</button>
+                    <button id="btn-redo" class="btn-undo-redo" disabled>重做</button>
+                    <button id="btn-save" class="btn-action"><span id="save-text">儲存作文</span></button>
+                    <button id="btn-clear" class="btn bg-red-500 text-white hover:bg-red-600">清空當頁</button>
+                    <input type="file" id="file-input" accept="image/png, image/jpeg" style="display: none;">
+                    <button id="btn-upload-file" class="btn bg-teal-600 text-white hover:bg-teal-700">上傳圖檔</button>
+                    <button id="btn-ai-critique" class="btn bg-indigo-600 text-white hover:bg-indigo-700">AI 批改</button>
+                </div>
+            </div>
+            <!-- 稿紙容器 -->
+            <div class="bg-white p-4 sm:p-8 rounded-xl shadow-2xl border border-gray-200">
+                <div id="loading-indicator" class="flex justify-center items-center text-blue-500 mb-4" style="display:none;"><svg class="animate-spin h-5 w-5 mr-3" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg><span class="ml-2">載入中...</span></div>
+                <div id="status-message" class="text-center mb-4 text-sm text-red-500"></div>
+                <div id="page-display" class="manuscript-grid horizontal-mode shadow-inner"></div>
+                <p id="word-count" class="text-right text-sm text-gray-500 mt-2">當前頁字數: 0/400</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- 通用模態框 -->
+    <div id="modal" class="fixed inset-0 bg-gray-900 bg-opacity-50 flex items-center justify-center z-50 transition-opacity duration-300 opacity-0 pointer-events-none">
+        <div class="bg-white p-6 rounded-xl shadow-2xl max-w-xl w-full transform transition-transform duration-300 scale-95" id="modal-content-wrapper">
+            <h3 id="modal-title" class="text-xl font-bold mb-4 text-gray-800">提示</h3>
+            <div id="modal-content" class="text-gray-600 mb-6 overflow-y-auto max-h-96"></div>
+            <button id="modal-close-btn" class="w-full bg-blue-500 text-white py-2 rounded-lg hover:bg-blue-600 transition">確定</button>
+            <div id="modal-action-container"></div>
+        </div>
+    </div>
+
+    <script type="module">
+        // --- 全域設定與變數 ---
+        // !!! 重要 !!! 請依照說明手動設定第一個管理員帳號
+        // 1. 清空 Firebase Authentication 中的所有使用者
+        // 2. 在此網站上註冊您的管理員帳號
+        // 3. 從 Firebase 控制台複製該帳號的 User UID
+        // 4. 將下面的 'YOUR_FIRST_REGISTERED_ADMIN_UID_HERE' 替換成您複製的 UID
+        const ADMIN_UIDS = ['dDSuyoXMv9fSff2WckR20Yqrkzh2']; 
+        let db, auth, userId = null, currentEssayId = null;
+        let isComposing = false; 
+        const columns = 20, cellsPerPage = 400, totalPages = 4;
+        const PARAGRAPH_INDENT = '  '; 
+        let manuscriptData = {}, currentPage = 1, writingMode = 'horizontal'; 
+        let history = [], historyIndex = -1;
+        const HISTORY_LIMIT = 50;
+        let firebaseConfig; // Will be defined in initializeAppAndAuth
+        let appSettings = {
+            canViewOthersEssays: true,
+            allowAuthorDelete: false,
+            allowEditBeforeCritique: true,
+            allowEditAfterCritique: false,
+            allowAuthorCritique: false,
+        };
+        let canEditCurrentEssay = false;
+        let allEssays = [];
+        let essayListPage = 1;
+        const ESSAYS_PER_PAGE = 15;
+        let blueHighlightIndices = new Set();
+        let redHighlightIndices = new Set();
+
+        // --- 頁面元素 ---
+        const authPage = document.getElementById('auth-page');
+        const homePage = document.getElementById('home-page');
+        const editorPage = document.getElementById('editor-page');
+
+        // --- 頁面切換邏輯 ---
+        const showHomePage = () => {
+            homePage.style.display = 'block';
+            authPage.style.display = 'none';
+            editorPage.style.display = 'none';
+            currentEssayId = null;
+            renderEssayList();
+        };
+
+        const showAuthPage = () => {
+            homePage.style.display = 'none';
+            authPage.style.display = 'block';
+            editorPage.style.display = 'none';
+        }
+
+        const showEditorPage = (essayId) => {
+            homePage.style.display = 'none';
+            authPage.style.display = 'none';
+            editorPage.style.display = 'block';
+            currentEssayId = essayId;
+            loadEssay(essayId);
+        };
+        
+        // --- 歷史紀錄管理 (Undo/Redo) ---
+        const captureState = () => {
+            const currentState = {
+                data: JSON.parse(JSON.stringify(manuscriptData)),
+                page: currentPage,
+                mode: writingMode
+            };
+            if (historyIndex < history.length - 1) {
+                history = history.slice(0, historyIndex + 1);
+            }
+            history.push(currentState);
+            historyIndex++;
+            if (history.length > HISTORY_LIMIT) {
+                history.shift();
+                historyIndex--;
+            }
+            updateUndoRedoButtons();
+        };
+
+        const loadStateFromHistory = (state) => {
+            manuscriptData = state.data;
+            currentPage = state.page;
+            writingMode = state.mode;
+            const modeInput = document.querySelector(`input[name="writing-mode"][value="${writingMode}"]`);
+            if (modeInput) modeInput.checked = true;
+            renderGrid();
+            updateUndoRedoButtons();
+            showMessage("操作已復原/重做。", false);
+        };
+
+        window.undoAction = () => {
+            if (historyIndex > 0) {
+                historyIndex--;
+                loadStateFromHistory(history[historyIndex]);
+            }
+        };
+
+        window.redoAction = () => {
+            if (historyIndex < history.length - 1) {
+                historyIndex++;
+                loadStateFromHistory(history[historyIndex]);
+            }
+        };
+
+        const updateUndoRedoButtons = () => {
+            const undoBtn = document.getElementById('btn-undo');
+            const redoBtn = document.getElementById('btn-redo');
+            undoBtn.disabled = historyIndex <= 0;
+            redoBtn.disabled = historyIndex >= history.length - 1;
+        };
+
+        // --- 輔助函數 (Modal, Loading, Messages) ---
+        const showLoading = (show, message = '載入中...') => {
+            const indicator = document.getElementById('loading-indicator');
+            const textEl = indicator ? indicator.querySelector('span') : null;
+            if (textEl) textEl.textContent = message;
+            if (indicator) indicator.style.display = show ? 'flex' : 'none';
+        };
+
+        const showMessage = (msg, isError = false, duration = 3000) => {
+            const statusEl = document.getElementById('status-message');
+            statusEl.textContent = msg;
+            statusEl.className = isError ? 'text-center mb-4 text-sm text-red-500' : 'text-center mb-4 text-sm text-green-600';
+            if (duration > 0) {
+                setTimeout(() => statusEl.textContent = '', duration);
+            }
+        };
+
+        const modal = document.getElementById('modal');
+        const modalTitle = document.getElementById('modal-title');
+        const modalContent = document.getElementById('modal-content');
+        const modalCloseBtn = document.getElementById('modal-close-btn');
+        const modalActionContainer = document.getElementById('modal-action-container');
+        const modalContentWrapper = document.getElementById('modal-content-wrapper');
+
+        const showModal = (title, content, isHtml = false) => {
+            modalActionContainer.innerHTML = '';
+            modalCloseBtn.style.display = 'block';
+            modalContentWrapper.className = 'bg-white p-6 rounded-xl shadow-2xl max-w-xl w-full transform transition-transform duration-300 scale-95';
+            modalTitle.textContent = title;
+            if (isHtml) modalContent.innerHTML = content;
+            else modalContent.textContent = content;
+            modal.classList.remove('opacity-0', 'pointer-events-none');
+            modal.querySelector('div').classList.remove('scale-95');
+        };
+
+        const showCritiqueModal = (title, htmlContent) => {
+            showModal(title, htmlContent, true);
+            modalContentWrapper.classList.remove('max-w-xl');
+            modalContentWrapper.classList.add('max-w-4xl');
+        };
+        
+        const closeModal = () => {
+            modal.classList.add('opacity-0', 'pointer-events-none');
+            modal.querySelector('div').classList.add('scale-95');
+        };
+        modalCloseBtn.onclick = closeModal;
+        
+        const handlePermissionError = (error) => {
+            console.error("Firebase Permission Error:", error);
+            const firestoreRulesUrl = `https://console.firebase.google.com/project/${firebaseConfig.projectId}/firestore/rules`;
+            const errorHtml = `
+                <div class="text-left space-y-3">
+                    <p><strong>讀寫資料庫失敗。</strong></p>
+                    <p>這通常是因為您 Firebase 專案的「安全規則」尚未設定。這是一個必要的一次性設定步驟。</p>
+                    <p>請依照以下步驟修正：</p>
+                    <ol class="list-decimal list-inside space-y-2 pl-4">
+                        <li>請確認您已在 Firebase 控制台的 "Build" > "Firestore Database" 中，<strong>建立並啟用</strong>了資料庫。</li>
+                        <li>
+                            點擊下方連結，前往您專案的規則設定頁面：<br>
+                            <a href="${firestoreRulesUrl}" target="_blank" class="text-blue-600 hover:underline break-all">${firestoreRulesUrl}</a>
+                        </li>
+                        <li>將編輯器中的所有文字，<strong>完全替換</strong>成以下內容：</li>
+                    </ol>
+                    <pre class='bg-gray-100 p-2 rounded mt-2 text-sm whitespace-pre-wrap'><code>rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if request.auth != null;
+    }
+  }
+}</code></pre>
+                    <p>4. 點擊 <strong>"發布"</strong> (Publish) 按鈕儲存變更。</p>
+                    <p>5. 回到此頁面並<strong>重新整理</strong>。</p>
+                </div>
+            `;
+            showModal("重要：Firebase 資料庫權限設定", errorHtml, true);
+        }
+
+        // --- Firebase & 初始化 ---
+        const listenToSettings = () => {
+            const settingsRef = window.firebase.doc(db, 'settings', 'permissions');
+            window.firebase.onSnapshot(settingsRef, (doc) => {
+                if (doc.exists()) {
+                    appSettings = { ...appSettings, ...doc.data() };
+                } else {
+                    if (ADMIN_UIDS.includes(userId)) {
+                        window.firebase.setDoc(settingsRef, appSettings).catch(e => console.error("Could not create default settings doc:", e));
+                    }
+                }
+                if (homePage.style.display === 'block') {
+                    renderEssayList();
+                }
+            }, (error) => {
+                if (error.code === 'permission-denied') {
+                    if (modal.classList.contains('opacity-0')) {
+                         handlePermissionError(error);
+                    }
+                } else {
+                    console.error("Error listening to settings:", error);
+                }
+            });
+        };
+        
+        async function initializeAppAndAuth() {
+             firebaseConfig = {
+                apiKey: "AIzaSyAk6Cf_nx-2GPHWojlQBPSEqrQ_FSx4Og4",
+                authDomain: "write-bedef.firebaseapp.com",
+                projectId: "write-bedef",
+                storageBucket: "write-bedef.firebasestorage.app",
+                messagingSenderId: "541142329395",
+                appId: "1:541142329395:web:1f0d4b728d7d0ec14a5b46",
+            };
+
+            try {
+                showLoading(true, '正在連接資料庫...');
+                const app = window.firebase.initializeApp(firebaseConfig);
+                db = window.firebase.getFirestore(app);
+                auth = window.firebase.getAuth(app);
+
+                window.firebase.onAuthStateChanged(auth, (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        document.getElementById('user-display').textContent = `歡迎, ${user.displayName || user.email}`;
+                        listenToSettings();
+                        showHomePage();
+                    } else {
+                        userId = null;
+                        showAuthPage();
+                    }
+                    showLoading(false);
+                });
+
+            } catch (error) {
+                console.error("Firebase 初始化錯誤:", error);
+                document.body.innerHTML = `<div class="text-red-500 p-8">Firebase 初始化錯誤: ${error.message}。</div>`
+            } 
+        }
+
+
+        // --- 作文列表與建立 (含分頁) ---
+        const changeEssayListPage = (newPage) => {
+            const totalPages = Math.ceil(allEssays.length / ESSAYS_PER_PAGE);
+            if (newPage < 1 || newPage > totalPages) return;
+            essayListPage = newPage;
+            displayCurrentEssayPage();
+            renderPaginationControls();
+        }
+
+        const renderPaginationControls = () => {
+            const totalItems = allEssays.length;
+            const totalPages = Math.ceil(totalItems / ESSAYS_PER_PAGE);
+            const container = document.getElementById('pagination-controls');
+            
+            if (totalPages <= 1) {
+                container.innerHTML = '';
+                return;
+            }
+
+            let buttonsHTML = '';
+            // Previous button
+            buttonsHTML += `<button data-page="${essayListPage - 1}" class="px-3 py-1 rounded-md ${essayListPage === 1 ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-white text-gray-700 hover:bg-gray-100 border'}">上一頁</button>`;
+
+            // Page numbers
+            for (let i = 1; i <= totalPages; i++) {
+                buttonsHTML += `<button data-page="${i}" class="px-3 py-1 rounded-md ${i === essayListPage ? 'bg-blue-600 text-white' : 'bg-white text-gray-700 hover:bg-gray-100 border'}">${i}</button>`;
+            }
+
+            // Next button
+            buttonsHTML += `<button data-page="${essayListPage + 1}" class="px-3 py-1 rounded-md ${essayListPage === totalPages ? 'bg-gray-200 text-gray-400 cursor-not-allowed' : 'bg-white text-gray-700 hover:bg-gray-100 border'}">下一頁</button>`;
+
+            container.innerHTML = buttonsHTML;
+
+            container.querySelectorAll('button').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    const page = parseInt(e.currentTarget.dataset.page);
+                    if (!isNaN(page)) {
+                        changeEssayListPage(page);
+                    }
+                });
+            });
+        }
+        
+        const addEssayListListeners = (container) => {
+            container.querySelectorAll('.essay-item, .btn-edit').forEach(item => {
+                const essayId = item.dataset.essayId || item.dataset.id;
+                item.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    showEditorPage(essayId);
+                });
+            });
+
+            container.querySelectorAll('.btn-delete').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    deleteEssay(e.currentTarget.dataset.id);
+                });
+            });
+
+            container.querySelectorAll('.btn-toggle-hide').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    toggleEssayVisibility(e.currentTarget.dataset.id, e.currentTarget.dataset.hidden === 'true');
+                });
+            });
+        };
+
+        const displayCurrentEssayPage = () => {
+            const listContainer = document.getElementById('essay-list-container');
+            const startIndex = (essayListPage - 1) * ESSAYS_PER_PAGE;
+            const endIndex = startIndex + ESSAYS_PER_PAGE;
+            const pagedEssays = allEssays.slice(startIndex, endIndex);
+            const isAdmin = ADMIN_UIDS.includes(userId);
+
+            if (pagedEssays.length === 0 && essayListPage > 1) {
+                // If on a page that no longer exists (e.g., after deletion), go to previous page
+                changeEssayListPage(essayListPage - 1);
+                return;
+            }
+
+            if(pagedEssays.length === 0){
+                 listContainer.innerHTML = '<p class="text-gray-500 text-center py-4">目前沒有任何作文，快來寫第一篇吧！</p>';
+                 return;
+            }
+            
+            listContainer.innerHTML = pagedEssays.map(essay => {
+                const isAuthor = essay.userId === userId;
+                const isCritiqued = essay.isCritiqued || false;
+                const essayDate = new Date(essay.createdAt || Date.now()).toLocaleString('zh-TW', { year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute:'2-digit' });
+                
+                let canEdit = false;
+                if(isAdmin){
+                    canEdit = isCritiqued ? appSettings.allowEditAfterCritique : true;
+                } else if (isAuthor){
+                    canEdit = isCritiqued ? appSettings.allowEditAfterCritique : appSettings.allowEditBeforeCritique;
+                }
+
+                let actionButtonsHTML = '';
+                if (isAdmin) {
+                    actionButtonsHTML = `
+                        ${canEdit ? `<button class="text-xs btn bg-blue-500 text-white hover:bg-blue-600 p-1 btn-edit" data-id="${essay.id}">編輯</button>` : ''}
+                        <button class="text-xs btn bg-red-500 text-white hover:bg-red-600 p-1 ml-2 btn-delete" data-id="${essay.id}">刪除</button>
+                        <button class="text-xs btn bg-yellow-500 text-white hover:bg-yellow-600 p-1 ml-2 btn-toggle-hide" data-id="${essay.id}" data-hidden="${essay.hidden}">${essay.hidden ? '顯示' : '隱藏'}</button>
+                    `;
+                } else if (isAuthor) {
+                     actionButtonsHTML = `
+                        ${canEdit ? `<button class="text-xs btn bg-blue-500 text-white hover:bg-blue-600 p-1 btn-edit" data-id="${essay.id}">編輯</button>` : ''}
+                        ${appSettings.allowAuthorDelete && !isCritiqued ? `<button class="text-xs btn bg-red-500 text-white hover:bg-red-600 p-1 ml-2 btn-delete" data-id="${essay.id}">刪除</button>` : ''}
+                     `;
+                }
+
+
+                return `
+                <div class="flex justify-between items-center p-4 border rounded-lg transition shadow-sm ${essay.hidden ? 'bg-gray-200' : 'hover:bg-gray-50'}">
+                    <div class="flex-grow cursor-pointer essay-item" data-essay-id="${essay.id}">
+                         <div class="flex items-center justify-between">
+                            <p class="font-bold text-lg ${essay.hidden ? 'text-gray-500' : 'text-blue-700'}">
+                                ${essay.title || '無標題'} 
+                                ${isCritiqued ? '<span class="text-xs font-medium bg-green-200 text-green-800 px-2 py-1 rounded-full ml-2 align-middle">已批改</span>' : ''}
+                                ${essay.hidden ? '<span class="text-xs font-medium bg-gray-300 text-gray-700 px-2 py-1 rounded-full ml-2 align-middle">(已隱藏)</span>' : ''}
+                            </p>
+                            <span class="text-xs text-gray-400 flex-shrink-0 ml-4">${essayDate}</span>
+                         </div>
+                        <p class="text-sm text-gray-500 mt-1">作者：${essay.author || '匿名'}</p>
+                    </div>
+                    <div class="flex-shrink-0 ml-4">
+                        ${actionButtonsHTML}
+                    </div>
+                </div>
+                `;
+            }).join('');
+
+            addEssayListListeners(listContainer);
+        }
+        
+        const renderEssayList = () => {
+            if (!db) {
+                console.log("Firestore 未初始化，無法讀取列表。");
+                return;
+            }
+            const essaysCollection = window.firebase.collection(db, `essays`);
+            const q = window.firebase.query(essaysCollection);
+            const isAdmin = ADMIN_UIDS.includes(userId);
+            
+            document.getElementById('admin-controls').style.display = isAdmin ? 'flex' : 'none';
+
+            window.firebase.onSnapshot(q, (snapshot) => {
+                if (snapshot.empty) {
+                    allEssays = [];
+                } else {
+                     allEssays = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+
+                    if (!isAdmin) {
+                         if (appSettings.canViewOthersEssays) {
+                            allEssays = allEssays.filter(essay => !essay.hidden);
+                        } else {
+                            allEssays = allEssays.filter(essay => essay.userId === userId);
+                        }
+                    }
+
+                    allEssays.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+                }
+                
+                const totalPages = Math.ceil(allEssays.length / ESSAYS_PER_PAGE);
+                if (essayListPage > totalPages && totalPages > 0) {
+                    essayListPage = totalPages;
+                } else if (allEssays.length === 0) {
+                    essayListPage = 1;
+                }
+
+                displayCurrentEssayPage();
+                renderPaginationControls();
+                
+            }, error => {
+                 if (error.code === 'permission-denied') {
+                    handlePermissionError(error);
+                } else {
+                    console.error("讀取作文列表失敗:", error);
+                    showMessage("無法載入作文列表。", true);
+                }
+            });
+        };
+
+        const showCreateEssayModal = () => {
+            modalTitle.textContent = "建立新作文";
+            modalContent.innerHTML = `
+                <div class="space-y-4">
+                     <div>
+                        <label for="input-title" class="block text-sm font-medium text-gray-700">作文題目</label>
+                        <input type="text" id="input-title" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm focus:border-indigo-500 focus:ring-indigo-500 sm:text-sm" placeholder="請輸入作文題目">
+                    </div>
+                </div>`;
+            
+            modalCloseBtn.style.display = 'none';
+            modalActionContainer.innerHTML = `
+                <div class="flex justify-end space-x-3 mt-4">
+                    <button id="modal-cancel-btn" class="btn bg-gray-200 text-gray-800 hover:bg-gray-300">取消</button>
+                    <button id="modal-confirm-create-btn" class="btn bg-green-600 text-white hover:bg-green-700">建立</button>
+                </div>`;
+            
+            document.getElementById('modal-cancel-btn').onclick = closeModal;
+            document.getElementById('modal-confirm-create-btn').onclick = () => {
+                const title = document.getElementById('input-title').value.trim();
+                if (!title) {
+                    showModal("輸入錯誤", "題目不能為空！");
+                    return;
+                }
+                createEssay(title);
+                closeModal();
+            };
+
+            modal.classList.remove('opacity-0', 'pointer-events-none');
+        };
+
+        const createEssay = async (title) => {
+            const user = auth.currentUser;
+            if (!user) {
+                showMessage("錯誤：使用者未登入", true);
+                return;
+            }
+            showLoading(true, '正在建立作文...');
+            try {
+                const essaysCollection = window.firebase.collection(db, `essays`);
+                const titleToInsert = title.slice(0, columns - 5);
+                const page1Content = ('    ' + titleToInsert).padEnd(cellsPerPage, ' ');
+                let initialPages = { '1': page1Content };
+                for (let i = 2; i <= totalPages; i++) initialPages[i] = ''.padEnd(cellsPerPage, ' ');
+
+                const newEssay = { 
+                    author: user.displayName || user.email,
+                    title, 
+                    createdAt: Date.now(), 
+                    pages: initialPages,
+                    userId: userId,
+                    hidden: false,
+                    isCritiqued: false,
+                    critiqueData: null
+                };
+                const docRef = await window.firebase.addDoc(essaysCollection, newEssay);
+                showMessage("作文建立成功！", false);
+                showEditorPage(docRef.id);
+            } catch (e) {
+                if (e.code === 'permission-denied') {
+                    handlePermissionError(e);
+                } else {
+                    console.error("建立作文失敗:", e);
+                    showMessage("建立作文失敗。", true);
+                }
+            } finally {
+                showLoading(false);
+            }
+        };
+
+        const deleteEssay = (essayId) => {
+            showModal("確認刪除", "您確定要永久刪除這篇作文嗎？此操作無法復原。", false);
+            modalCloseBtn.style.display = 'none';
+            modalActionContainer.innerHTML = `
+                <div class="flex justify-end space-x-3 mt-4">
+                    <button id="modal-cancel-delete" class="btn bg-gray-200 text-gray-800 hover:bg-gray-300">取消</button>
+                    <button id="modal-confirm-delete" class="btn bg-red-600 text-white hover:bg-red-700">確定刪除</button>
+                </div>`;
+            document.getElementById('modal-cancel-delete').onclick = closeModal;
+            document.getElementById('modal-confirm-delete').onclick = async () => {
+                try {
+                    await window.firebase.deleteDoc(window.firebase.doc(db, `essays`, essayId));
+                    showMessage("作文已刪除。");
+                    closeModal();
+                } catch (error) {
+                    console.error("刪除作文失敗:", error);
+                    showMessage("刪除失敗。", true);
+                }
+            };
+        };
+
+        const toggleEssayVisibility = async (essayId, isHidden) => {
+            try {
+                const docRef = window.firebase.doc(db, `essays`, essayId);
+                await window.firebase.setDoc(docRef, { hidden: !isHidden }, { merge: true });
+                showMessage(`作文已${!isHidden ? '隱藏' : '顯示'}`);
+            } catch (error) {
+                console.error("更新可見性失败:", error);
+                showMessage("操作失敗。", true);
+            }
+        };
+
+        // --- 作文存取 (讀/寫) ---
+        const toggleEditorControls = (canEdit, isAdmin, isAuthor, isCritiqued) => {
+             // Editing buttons
+            ['btn-undo', 'btn-redo', 'btn-save', 'btn-clear', 'btn-upload-file'].forEach(id => {
+                const btn = document.getElementById(id);
+                if(btn) btn.style.display = canEdit ? 'inline-block' : 'none';
+            });
+
+            // AI Critique button
+            const aiCritiqueBtn = document.getElementById('btn-ai-critique');
+            if (aiCritiqueBtn) {
+                 const canCritique = !isCritiqued && (isAdmin || (appSettings.allowAuthorCritique && isAuthor));
+                 aiCritiqueBtn.style.display = canCritique ? 'inline-block' : 'none';
+            }
+
+            // Grid cells
+            document.querySelectorAll('.grid-cell').forEach(cell => {
+                cell.setAttribute('contenteditable', canEdit ? 'true' : 'false');
+            });
+            
+            // Status message
+            if (!canEdit && isCritiqued) {
+                showMessage("此作文已批改完成，編輯功能已鎖定。", false, 0);
+            } else if (!canEdit) {
+                 showMessage("您正在以唯讀模式檢視，或編輯權限已關閉。", false, 0);
+            } else {
+                showMessage("", false, 0);
+            }
+        };
+
+        const loadEssay = async (essayId) => {
+            showLoading(true, '正在載入作文...');
+            try {
+                const docRef = window.firebase.doc(db, `essays`, essayId);
+                const docSnap = await window.firebase.getDoc(docRef);
+
+                if (docSnap.exists()) {
+                    const data = docSnap.data();
+                    const isAdmin = ADMIN_UIDS.includes(userId);
+                    const isAuthor = data.userId === userId;
+                    const isCritiqued = data.isCritiqued || false;
+
+                    let canEdit = false;
+                    if (isCritiqued) {
+                        if (appSettings.allowEditAfterCritique && (isAdmin || isAuthor)) {
+                            canEdit = true;
+                        }
+                    } else {
+                         canEdit = appSettings.allowEditBeforeCritique && (isAdmin || isAuthor);
+                    }
+                    canEditCurrentEssay = canEdit;
+
+
+                    document.getElementById('essay-title-display').textContent = `正在編輯: ${data.title} (作者: ${data.author})`;
+                    manuscriptData = data.pages || {};
+                    for (let i = 1; i <= totalPages; i++) {
+                        manuscriptData[i] = (manuscriptData[i] || '').padEnd(cellsPerPage, ' ');
+                    }
+                    currentPage = 1;
+                    writingMode = 'horizontal';
+                    document.querySelector('input[name="writing-mode"][value="horizontal"]').checked = true;
+                    
+                    
+                    const viewCritiqueBtn = document.getElementById('btn-view-critique');
+                    if (isCritiqued && data.critiqueData) {
+                        processHighlights(data.critiqueData);
+                        viewCritiqueBtn.style.display = 'inline-block';
+                        viewCritiqueBtn.onclick = () => displayCritique(data.critiqueData);
+                        displayCritique(data.critiqueData); // Show initial modal
+                    } else {
+                        blueHighlightIndices.clear();
+                        redHighlightIndices.clear();
+                        viewCritiqueBtn.style.display = 'none';
+                    }
+                    
+                    renderGrid();
+                    toggleEditorControls(canEdit, isAdmin, isAuthor, isCritiqued);
+
+                    history = []; 
+                    historyIndex = -1; 
+                    if(canEdit) captureState();
+
+                    showMessage("作文載入成功。");
+                } else {
+                    showMessage("找不到指定的作文。", true);
+                    showHomePage();
+                }
+            } catch (e) {
+                console.error("載入作文失敗:", e);
+                showMessage("載入作文時發生錯誤。", true);
+                showHomePage();
+            } finally {
+                showLoading(false);
+            }
+        };
+
+        const saveEssay = async () => {
+            if (!db || !currentEssayId) return;
+            const saveBtn = document.getElementById('btn-save'), saveText = document.getElementById('save-text');
+            const originalText = saveText.textContent;
+            saveText.textContent = '儲存中...'; saveBtn.disabled = true;
+
+            try {
+                collectPageContent();
+                const docRef = window.firebase.doc(db, `essays`, currentEssayId);
+                await window.firebase.setDoc(docRef, { pages: manuscriptData, lastModified: Date.now() }, { merge: true });
+                showMessage("作文儲存成功！");
+            } catch (e) {
+                console.error("儲存作文失敗:", e);
+                showMessage(`儲存失敗: ${e.message}`, true);
+            } finally {
+                saveText.textContent = originalText; saveBtn.disabled = false;
+            }
+        };
+        
+        // --- 核心稿紙邏輯 ---
+        const populateManuscript = (newText) => {
+            const cleanText = newText.replace(/[\r\n]/g, '').replace(/\s/g, '').trim();
+            if (cleanText.length === 0) { showMessage("提取的文本為空。", true); return; }
+            for (let i = 1; i <= totalPages; i++) manuscriptData[i] = "".padEnd(cellsPerPage, ' ');
+            let remainingText = cleanText, pageIndex = 1, totalFilled = 0;
+            while (remainingText.length > 0 && pageIndex <= totalPages) {
+                const textToFill = remainingText.slice(0, cellsPerPage);
+                manuscriptData[pageIndex] = textToFill.padEnd(cellsPerPage, ' ');
+                remainingText = remainingText.slice(cellsPerPage);
+                totalFilled += textToFill.length;
+                pageIndex++;
+            }
+            if (remainingText.length > 0) showMessage(`警告：文本溢出 ${remainingText.length} 個字元。`, true);
+            else showMessage(`成功載入 ${totalFilled} 個字元。`, false);
+            currentPage = 1; renderGrid(); captureState();
+        };
+
+        const cascadeOverflow = (startPage, overflowText) => {
+            let currentPageIndex = startPage;
+            let overflow = overflowText;
+            while (overflow.length > 0 && currentPageIndex <= totalPages) {
+                if (!manuscriptData[currentPageIndex]) manuscriptData[currentPageIndex] = "".padEnd(cellsPerPage, ' ');
+                let nextPageContent = manuscriptData[currentPageIndex].trimEnd();
+                let combinedContent = overflow + nextPageContent;
+                let fits = combinedContent.slice(0, cellsPerPage).padEnd(cellsPerPage, ' ');
+                overflow = combinedContent.slice(cellsPerPage).trimEnd();
+                manuscriptData[currentPageIndex] = fits;
+                currentPageIndex++;
+            }
+            if (overflow.length > 0) showMessage(`警告：內容溢出 ${overflow.length} 個字元。`, true);
+        };
+
+        const rippleBackContent = (startPage) => {
+            let pageIndex = startPage;
+            while (pageIndex < totalPages) {
+                const nextPage = pageIndex + 1;
+                if (manuscriptData[nextPage]) {
+                    const nextPageContent = manuscriptData[nextPage].trimEnd();
+                    if (nextPageContent.length > 0) {
+                        const charToMove = nextPageContent.charAt(0);
+                        manuscriptData[pageIndex] = (manuscriptData[pageIndex].slice(0, cellsPerPage - 1) + charToMove).padEnd(cellsPerPage, ' ');
+                        manuscriptData[nextPage] = (manuscriptData[nextPage].slice(1)).padEnd(cellsPerPage, ' ');
+                        pageIndex++;
+                    } else break;
+                } else break;
+            }
+        };
+
+        const collectPageContent = () => { 
+            const cells = document.querySelectorAll('.grid-cell'); 
+            let content = ''; 
+            cells.forEach(cell => { 
+                const char = cell.textContent.trim().charAt(0) || ' '; 
+                content += char; 
+            }); 
+            if(manuscriptData) manuscriptData[currentPage] = content.slice(0, cellsPerPage); 
+        };
+
+        const processHighlights = (critiqueData) => {
+            blueHighlightIndices.clear();
+            redHighlightIndices.clear();
+            if (!critiqueData || !manuscriptData) return;
+
+            const clean = (str) => str.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()。，、？！；：“”‘’《》〈〉【】「」『』\s]/g, "");
+
+            let rawFullText = '';
+            for (let i = 1; i <= totalPages; i++) {
+                rawFullText += (manuscriptData[i] || '');
+            }
+            const cleanFullText = clean(rawFullText);
+
+            if (critiqueData.best_sentences) {
+                critiqueData.best_sentences.forEach(item => {
+                    const cleanSentence = clean(item.sentence);
+                    if (cleanSentence.length === 0) return;
+                    let startIndex = cleanFullText.indexOf(cleanSentence);
+                    if (startIndex !== -1) {
+                        for (let i = 0; i < cleanSentence.length; i++) {
+                            blueHighlightIndices.add(startIndex + i);
+                        }
+                    }
+                });
+            }
+            
+            if (critiqueData.sentence_revisions) {
+                critiqueData.sentence_revisions.forEach(item => {
+                    const cleanSentence = clean(item.original_sentence);
+                    if (cleanSentence.length === 0) return;
+                    let startIndex = cleanFullText.indexOf(cleanSentence);
+                    if (startIndex !== -1) {
+                        for (let i = 0; i < cleanSentence.length; i++) {
+                            redHighlightIndices.add(startIndex + i);
+                            blueHighlightIndices.delete(startIndex + i); // Ensure red takes precedence
+                        }
+                    }
+                });
+            }
+        };
+        
+        const renderGrid = () => { 
+            const gridContainer = document.getElementById('page-display'); 
+            gridContainer.innerHTML = ''; 
+            gridContainer.className = `manuscript-grid ${writingMode}-mode shadow-inner`; 
+            const content = (manuscriptData[currentPage] || '').padEnd(cellsPerPage, ' '); 
+            const clean = (str) => str.replace(/[.,\/#!$%\^&\*;:{}=\-_`~()。，、？！；：“”‘’《》〈〉【】「」『』\s]/g, "");
+            
+            let cleanOffset = 0;
+            for (let p = 1; p < currentPage; p++) {
+                cleanOffset += clean(manuscriptData[p] || '').length;
+            }
+
+            let cleanCharCounterInPage = 0;
+            for (let i = 0; i < cellsPerPage; i++) { 
+                const cell = document.createElement('div'); 
+                cell.className = 'grid-cell'; 
+                cell.setAttribute('contenteditable', 'true'); 
+                cell.dataset.index = i; 
+                
+                const char = content.charAt(i);
+                const trimmedChar = char.trim(); 
+                
+                cell.textContent = trimmedChar; 
+                if (!trimmedChar) cell.innerHTML = '&nbsp;'; 
+
+                if (clean(char) !== '') {
+                    const globalCleanIndex = cleanOffset + cleanCharCounterInPage;
+                    if (redHighlightIndices.has(globalCleanIndex)) {
+                        cell.style.color = '#DC2626'; // red-600
+                        cell.style.fontWeight = 'bold';
+                    } else if (blueHighlightIndices.has(globalCleanIndex)) {
+                        cell.style.color = '#2563EB'; // blue-600
+                        cell.style.fontWeight = 'bold';
+                    }
+                    cleanCharCounterInPage++;
+                }
+
+                cell.addEventListener('input', handleCellInput); 
+                cell.addEventListener('keydown', handleCellKeydown); 
+                cell.addEventListener('paste', handleCellPaste); 
+                cell.addEventListener('compositionstart', handleCompositionStart); 
+                cell.addEventListener('compositionend', handleCompositionEnd); 
+                if (writingMode === 'vertical') { 
+                    const row = (i % columns) + 1; 
+                    const col = columns - Math.floor(i / columns); 
+                    cell.style.gridRow = row; 
+                    cell.style.gridColumn = col; 
+                } 
+                gridContainer.appendChild(cell); 
+            } 
+            updateWordCount(content); 
+            updatePageButtonState(); 
+        };
+
+        const handleCompositionStart = () => { isComposing = true; };
+
+        const handleCompositionEnd = (event) => { 
+            isComposing = false; 
+            const cell = event.target; 
+            let committedText = cell.textContent.trim(); 
+            cell.textContent = ''; 
+            if (committedText.length === 0) return; 
+            let currentIndex = parseInt(cell.getAttribute('data-index')); 
+            collectPageContent(); 
+            let currentContent = manuscriptData[currentPage]; 
+            const contentStart = currentContent.slice(0, currentIndex); 
+            const contentToPush = currentContent.slice(currentIndex).trimEnd(); 
+            const totalNewText = contentStart + committedText + contentToPush; 
+            let newCurrentPageContent = totalNewText.slice(0, cellsPerPage).padEnd(cellsPerPage, ' '); 
+            let overflowText = totalNewText.slice(cellsPerPage).trimEnd(); 
+            manuscriptData[currentPage] = newCurrentPageContent; 
+            if (overflowText.length > 0) cascadeOverflow(currentPage + 1, overflowText); 
+            renderGrid(); 
+            updateWordCount(manuscriptData[currentPage]); 
+            captureState(); 
+            const theoreticalEndIndex = currentIndex + committedText.length; 
+            if (theoreticalEndIndex < cellsPerPage) { 
+                const nextCell = document.querySelector(`.grid-cell[data-index="${theoreticalEndIndex}"]`); 
+                if (nextCell) setTimeout(() => nextCell.focus(), 0); 
+            } else if (currentPage < totalPages) { 
+                changePage(currentPage + 1); 
+                setTimeout(() => { 
+                    const targetIndex = Math.min(theoreticalEndIndex - cellsPerPage, cellsPerPage - 1); 
+                    const newPageCell = document.querySelector(`.grid-cell[data-index="${targetIndex}"]`); 
+                    if (newPageCell) newPageCell.focus(); 
+                }, 10); 
+            } else { 
+                const lastCell = document.querySelector(`.grid-cell[data-index="${cellsPerPage - 1}"]`); 
+                if(lastCell) lastCell.focus();
+            } 
+        };
+
+        const handleCellInput = (event) => { 
+            if (isComposing) return; 
+            const cell = event.target; 
+            let text = cell.textContent; 
+            const currentIndex = parseInt(cell.getAttribute('data-index')); 
+            setTimeout(() => { 
+                if (text.length > 1) { text = text.charAt(0); cell.textContent = text; } 
+                if (text.trim() === '') cell.innerHTML = '&nbsp;'; 
+                else cell.textContent = text.trim().charAt(0); 
+                collectPageContent(); 
+                updateWordCount(manuscriptData[currentPage]); 
+                captureState(); 
+                if (text.trim() !== '') { 
+                    const nextIndex = currentIndex + 1; 
+                    const nextCell = document.querySelector(`.grid-cell[data-index="${nextIndex}"]`); 
+                    if (nextCell) nextCell.focus(); 
+                    else if (currentPage < totalPages) { 
+                        changePage(currentPage + 1); 
+                        setTimeout(() => { document.querySelector(`.grid-cell[data-index="0"]`)?.focus(); }, 10); 
+                    } 
+                } 
+            }, 0);
+        };
+
+        const handleCellPaste = (event) => {
+            event.preventDefault();
+            const cell = event.target;
+            const pastedText = (event.clipboardData || window.clipboardData).getData('text');
+            if (!pastedText) return;
+
+            let charactersToInsert = pastedText.replace(/[\r\n]/g, '').replace(/\s+/g, '');
+            if (charactersToInsert.length === 0) return;
+
+            let currentIndex = parseInt(cell.dataset.index);
+            collectPageContent();
+            let currentContent = manuscriptData[currentPage];
+            const contentStart = currentContent.slice(0, currentIndex);
+            const contentToPush = currentContent.slice(currentIndex).trimEnd();
+            const totalNewText = contentStart + charactersToInsert + contentToPush;
+
+            manuscriptData[currentPage] = totalNewText.slice(0, cellsPerPage).padEnd(cellsPerPage, ' ');
+            let overflowText = totalNewText.slice(cellsPerPage).trimEnd();
+            if (overflowText.length > 0) {
+                cascadeOverflow(currentPage + 1, overflowText);
+            }
+
+            renderGrid();
+            updateWordCount(manuscriptData[currentPage]);
+            captureState();
+
+            const theoreticalEndIndex = currentIndex + charactersToInsert.length;
+            let targetPage = currentPage + Math.floor(theoreticalEndIndex / cellsPerPage);
+            let targetIndex = theoreticalEndIndex % cellsPerPage;
+
+            if (targetPage > totalPages) {
+                targetPage = totalPages;
+                targetIndex = manuscriptData[totalPages].trimEnd().length;
+            }
+
+            if (targetPage > currentPage) {
+                changePage(targetPage);
+                setTimeout(() => { document.querySelector(`.grid-cell[data-index="${targetIndex}"]`)?.focus(); }, 10);
+            } else {
+                const nextCell = document.querySelector(`.grid-cell[data-index="${targetIndex}"]`);
+                if (nextCell) setTimeout(() => nextCell.focus(), 10);
+            }
+        };
+
+        const handleCellKeydown = (event) => {
+            const cell = event.target;
+            const currentIndex = parseInt(cell.dataset.index);
+            let nextIndex = currentIndex;
+
+            if (event.key === 'Backspace') {
+                if (isComposing) return;
+                event.preventDefault();
+                if (currentIndex === 0 && currentPage === 1) return;
+                if (currentIndex === 0 && currentPage > 1) {
+                    changePage(currentPage - 1);
+                    setTimeout(() => document.querySelector(`.grid-cell[data-index="${cellsPerPage - 1}"]`)?.focus(), 10);
+                    return;
+                }
+                collectPageContent();
+                const indexToDelete = currentIndex - 1;
+                manuscriptData[currentPage] = (manuscriptData[currentPage].slice(0, indexToDelete) + manuscriptData[currentPage].slice(currentIndex)).padEnd(cellsPerPage, ' ');
+                rippleBackContent(currentPage);
+                renderGrid();
+                updateWordCount(manuscriptData[currentPage]);
+                document.querySelector(`.grid-cell[data-index="${indexToDelete}"]`)?.focus();
+                captureState();
+            } else if (event.key === 'Delete') {
+                 if (isComposing) return;
+                event.preventDefault();
+                collectPageContent();
+                manuscriptData[currentPage] = (manuscriptData[currentPage].slice(0, currentIndex) + manuscriptData[currentPage].slice(currentIndex + 1)).padEnd(cellsPerPage, ' ');
+                rippleBackContent(currentPage);
+                renderGrid();
+                updateWordCount(manuscriptData[currentPage]);
+                cell.focus();
+                captureState();
+            } else if (event.key === 'Enter') {
+                event.preventDefault();
+                const row = Math.floor(currentIndex / columns);
+                const nextLineStartIndex = (row + 1) * columns;
+                if (nextLineStartIndex >= cellsPerPage) {
+                    if (currentPage < totalPages) changePage(currentPage + 1);
+                    return;
+                }
+                collectPageContent();
+                let currentContent = manuscriptData[currentPage];
+                const contentBefore = currentContent.slice(0, currentIndex);
+                const contentToShift = currentContent.slice(currentIndex).trimEnd();
+                const filler = ' '.repeat(nextLineStartIndex - contentBefore.length);
+                const shifted = contentBefore + filler + PARAGRAPH_INDENT + contentToShift;
+                manuscriptData[currentPage] = shifted.slice(0, cellsPerPage).padEnd(cellsPerPage, ' ');
+                let overflow = shifted.slice(cellsPerPage).trimEnd();
+                if (overflow.length > 0) cascadeOverflow(currentPage + 1, overflow);
+                renderGrid();
+                document.querySelector(`.grid-cell[data-index="${nextLineStartIndex + PARAGRAPH_INDENT.length}"]`)?.focus();
+                captureState();
+            } else if (event.key.startsWith('Arrow')) {
+                event.preventDefault();
+                if (writingMode === 'horizontal') {
+                    if (event.key === 'ArrowLeft') nextIndex--;
+                    if (event.key === 'ArrowRight') nextIndex++;
+                    if (event.key === 'ArrowUp') nextIndex -= columns;
+                    if (event.key === 'ArrowDown') nextIndex += columns;
+                } else { // vertical
+                    if (event.key === 'ArrowUp') nextIndex--;
+                    if (event.key === 'ArrowDown') nextIndex++;
+                    if (event.key === 'ArrowLeft') nextIndex += columns;
+                    if (event.key === 'ArrowRight') nextIndex -= columns;
+                }
+
+                if (nextIndex >= 0 && nextIndex < cellsPerPage) {
+                    document.querySelector(`.grid-cell[data-index="${nextIndex}"]`)?.focus();
+                } else if (nextIndex < 0 && currentPage > 1) {
+                    changePage(currentPage - 1);
+                    setTimeout(() => document.querySelector(`.grid-cell[data-index="${cellsPerPage - 1}"]`)?.focus(), 10);
+                } else if (nextIndex >= cellsPerPage && currentPage < totalPages) {
+                    changePage(currentPage + 1);
+                     setTimeout(() => document.querySelector(`.grid-cell[data-index="0"]`)?.focus(), 10);
+                }
+            }
+        };
+
+        const changePage = (pageNumber) => { 
+            if (pageNumber < 1 || pageNumber > totalPages || pageNumber === currentPage) return; 
+            collectPageContent(); 
+            currentPage = pageNumber; 
+            renderGrid(); 
+        };
+
+        const updatePageButtonState = () => { 
+            document.querySelectorAll('.btn-page').forEach(btn => { 
+                btn.classList.remove('active'); 
+                if (parseInt(btn.dataset.page) === currentPage) btn.classList.add('active'); 
+            }); 
+        };
+        
+        const getTotalWordCount = () => {
+            if (!manuscriptData) return 0;
+            let total = 0;
+            for (const page in manuscriptData) {
+                total += (manuscriptData[page] || '').replace(/\s/g, '').length;
+            }
+            return total;
+        };
+
+        const updateWordCount = (content) => { 
+            const charCount = (content || '').replace(/\s/g, '').length; 
+            const totalChars = getTotalWordCount();
+            document.getElementById('word-count').textContent = `當前頁字數: ${charCount}/${cellsPerPage} (總字數: ${totalChars}/${totalPages * cellsPerPage})`; 
+        };
+
+        const clearCurrentPageContent = () => {
+            showModal("確認清空", "您確定要清空當前頁面嗎？此操作無法復原。", false);
+            modalCloseBtn.style.display = 'none';
+            modalActionContainer.innerHTML = `
+                <div class="flex justify-end space-x-3 mt-4">
+                    <button id="modal-cancel-clear" class="btn bg-gray-200 text-gray-800 hover:bg-gray-300">取消</button>
+                    <button id="modal-confirm-clear" class="btn bg-red-600 text-white hover:bg-red-700">確定清空</button>
+                </div>
+            `;
+            document.getElementById('modal-cancel-clear').onclick = closeModal;
+            document.getElementById('modal-confirm-clear').onclick = () => {
+                manuscriptData[currentPage] = "".padEnd(cellsPerPage, ' ');
+                renderGrid();
+                captureState();
+                closeModal();
+            };
+        };
+
+        const setWritingMode = (mode) => { 
+            writingMode = mode; 
+            renderGrid(); 
+            captureState(); 
+        };
+        window.setWritingMode = setWritingMode;
+
+        const handleFileUpload = (event) => { 
+            const file = event.target.files[0];
+            if (!file) return;
+            if (file.type.startsWith('image/')) {
+                processImageForOCR(file);
+            } else {
+                showModal("不支持的文件格式", "請上傳 PNG 或 JPG 圖像文件。");
+            }
+            event.target.value = '';
+        };
+
+        const processImageForOCR = async (file) => { 
+            showLoading(true, '圖像識別中...');
+            try {
+                const { data: { text } } = await Tesseract.recognize(file, 'chi_tra', {
+                    logger: m => {
+                        if (m.status === 'recognizing text') {
+                           showLoading(true, `識別進度: ${Math.round(m.progress * 100)}%`);
+                        }
+                    }
+                });
+                if (text && text.trim().length > 0) {
+                    populateManuscript(text);
+                } else {
+                    showModal("識別失敗", "無法從圖片中讀取文字。");
+                }
+            } catch (error) {
+                console.error("OCR Error:", error);
+                showModal("OCR 錯誤", "文字識別時發生錯誤。");
+            } finally {
+                showLoading(false);
+            }
+        };
+        
+        const displayCritique = (critiqueJson) => {
+            const S = critiqueJson.scores;
+            const R = critiqueJson.detailed_review;
+            const totalScore = Math.round(S.content_theme * 10 + S.structure_organization * 5 + S.diction_grammar * 5);
+            
+            let htmlContent = `<div class="critique-section bg-indigo-100 p-6"><h4 class="text-xl font-bold text-indigo-800 mb-4">總評</h4><p class="text-gray-700">${critiqueJson.overall_comment}</p></div><div class="critique-section"><h4 class="critique-title">評分</h4><ul class="list-disc list-inside space-y-1"><li><strong>內容與主題 (50%)：</strong> ${S.content_theme}/5 分</li><li><strong>結構與組織 (25%)：</strong> ${S.structure_organization}/5 分</li><li><strong>用字遣詞與語法 (25%)：</strong> ${S.diction_grammar}/5 分</li><li class="mt-3"><strong class="text-xl text-red-600">總分：</strong> ${totalScore}/100 分</li></ul></div><div class="critique-section"><h4 class="critique-title">講評</h4><div class="space-y-4 text-gray-700"><p><strong>內容與主題：</strong> ${R.content_theme}</p><p><strong>結構與組織：</strong> ${R.structure_organization}</p><p><strong>用字遣詞與語法：</strong> ${R.diction_grammar}</p></div></div>`;
+            if (critiqueJson.best_sentences?.length > 0) {
+                htmlContent += `<div class="critique-section"><h4 class="critique-title">佳句選粹</h4><ul class="list-none space-y-3 text-gray-700">${critiqueJson.best_sentences.map(item => `<li class="p-2 border-l-4 border-yellow-500 bg-white shadow-sm"><p class="italic text-lg text-yellow-800">「${item.sentence}」</p><p class="text-sm mt-1 text-gray-500"><strong>評語：</strong> ${item.reason}</p></li>`).join('')}</ul></div>`;
+            }
+            if (critiqueJson.sentence_revisions?.length > 0) {
+                htmlContent += `<div class="critique-section"><h4 class="critique-title">文章修改建議</h4><ul class="list-none space-y-4 text-gray-700">${critiqueJson.sentence_revisions.map(item => `<li class="p-3 border rounded-lg bg-white shadow-sm"><p class="text-sm text-gray-500">原句：</p><p class="text-red-600 pl-2 border-l-4 border-red-200">「${item.original_sentence}」</p><p class="text-sm text-gray-500 mt-2">修改後：</p><p class="text-green-700 font-medium pl-2 border-l-4 border-green-200">「${item.revised_sentence}」</p></li>`).join('')}</ul></div>`;
+            }
+            showCritiqueModal("AI 智能作文批改報告", htmlContent);
+        };
+
+        const generateAiCritique = async () => { 
+            const totalChars = getTotalWordCount();
+            if (totalChars < 20) {
+                showModal("內容太少", "請至少輸入 20 個字以進行 AI 批改。");
+                return;
+            }
+            showLoading(true, "AI 批改中...");
+            const aiCritiqueBtn = document.getElementById('btn-ai-critique');
+            aiCritiqueBtn.disabled = true;
+            let essayText = '';
+            Object.values(manuscriptData).forEach(page => essayText += page.replace(/\s/g, ''));
+            
+            const critiqueSchema = { type: "OBJECT", properties: { overall_comment: { type: "STRING" }, scores: { type: "OBJECT", properties: { content_theme: { type: "INTEGER" }, structure_organization: { type: "INTEGER" }, diction_grammar: { type: "INTEGER" } } }, detailed_review: { type: "OBJECT", properties: { content_theme: { type: "STRING" }, structure_organization: { type: "STRING" }, diction_grammar: { type: "STRING" } } }, best_sentences: { type: "ARRAY", items: { type: "OBJECT", properties: { sentence: { type: "STRING" }, reason: { type: "STRING" } } } }, sentence_revisions: { type: "ARRAY", items: { type: "OBJECT", properties: { original_sentence: { type: "STRING" }, revised_sentence: { type: "STRING" } } } } } };
+            const systemPrompt = "你是一位專業且溫和的中文作文批改老師。請嚴格按照以下三個標準和比例對學生提供的作文進行評分和講評。你的語氣必須保持鼓勵和支持，詳細指出優點和改進方向。輸出格式必須嚴格遵守提供的 JSON Schema。評分標準：1. 內容與主題 (50%) 2. 結構與組織 (25%) 3. 用字遣詞與語法 (25%)。每個子項目滿分 5 分。最後，請在 'sentence_revisions' 項目中，找出 2-3 句原文中可以改進的句子，並提供修改後的版本。";
+            const userQuery = `請根據您的專業知識，對以下文章進行批改與講評，並輸出結構化 JSON 結果：\n\n${essayText}`;
+            const apiKey = "";
+            const apiUrl = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash-preview-05-20:generateContent?key=${apiKey}`;
+            const payload = { contents: [{ parts: [{ text: userQuery }] }], systemInstruction: { parts: [{ text: systemPrompt }] }, generationConfig: { responseMimeType: "application/json", responseSchema: critiqueSchema } };
+
+            try {
+                const response = await fetch(apiUrl, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+                if (!response.ok) throw new Error(`API 錯誤: ${response.status}`);
+                const result = await response.json();
+                const candidate = result?.candidates?.[0];
+                if (!candidate?.content?.parts?.[0]?.text) throw new Error("API 回應格式不正確。");
+                
+                const critiqueJson = JSON.parse(candidate.content.parts[0].text);
+                
+                // Save critique to Firestore
+                const docRef = window.firebase.doc(db, `essays`, currentEssayId);
+                await window.firebase.setDoc(docRef, { 
+                    critiqueData: critiqueJson, 
+                    isCritiqued: true,
+                    lastModified: Date.now() 
+                }, { merge: true });
+
+                // Process and display highlights
+                processHighlights(critiqueJson);
+                renderGrid();
+                displayCritique(critiqueJson);
+                toggleEditorControls(false, true, true); // canEdit=false, isAdmin=true, isCritiqued=true
+                
+                const viewCritiqueBtn = document.getElementById('btn-view-critique');
+                viewCritiqueBtn.style.display = 'inline-block';
+                viewCritiqueBtn.onclick = () => displayCritique(critiqueJson);
+
+                showMessage("批改完成，作文已鎖定。");
+
+
+            } catch (error) {
+                console.error("AI Critique Error:", error);
+                showModal("批改失敗", "AI 服務暫時無法使用，請稍後再試。");
+            } finally {
+                showLoading(false);
+                aiCritiqueBtn.disabled = false;
+            }
+        };
+        
+        // --- 管理員功能 ---
+        const exportData = async () => {
+            showLoading(true, '正在匯出...');
+            try {
+                const essaysCollection = window.firebase.collection(db, `essays`);
+                const snapshot = await window.firebase.getDocs(essaysCollection);
+                const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                
+                const dataStr = JSON.stringify(data, null, 2);
+                const dataBlob = new Blob([dataStr], {type: "application/json"});
+                const url = URL.createObjectURL(dataBlob);
+                
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = `essays-backup-${new Date().toISOString().slice(0,10)}.json`;
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                showMessage('資料匯出成功！');
+            } catch (e) {
+                console.error("匯出失敗:", e);
+                showMessage('匯出失敗。', true);
+            } finally {
+                showLoading(false);
+            }
+        };
+
+        const importData = async (file) => {
+            showModal("確認匯入", "警告：匯入資料將會<strong class='text-red-600'>覆蓋</strong>目前所有的作文資料，此操作無法復原。您確定要繼續嗎？", true);
+            modalActionContainer.innerHTML = `
+                <div class="flex justify-end space-x-3 mt-4">
+                    <button id="modal-cancel-import" class="btn bg-gray-200 text-gray-800 hover:bg-gray-300">取消</button>
+                    <button id="modal-confirm-import" class="btn bg-red-600 text-white hover:bg-red-700">確定覆蓋並匯入</button>
+                </div>`;
+            document.getElementById('modal-cancel-import').onclick = closeModal;
+            document.getElementById('modal-confirm-import').onclick = () => {
+                closeModal();
+                const reader = new FileReader();
+                reader.onload = async (e) => {
+                    showLoading(true, '正在清空並匯入...');
+                    try {
+                        const data = JSON.parse(e.target.result);
+                        if (!Array.isArray(data)) throw new Error('JSON 檔案格式不正確，根層級必須是陣列。');
+
+                        // 1. Clear all existing data
+                        const essaysCollection = window.firebase.collection(db, `essays`);
+                        const snapshot = await window.firebase.getDocs(essaysCollection);
+                        const deleteBatch = window.firebase.writeBatch(db);
+                        snapshot.docs.forEach(doc => deleteBatch.delete(doc.ref));
+                        await deleteBatch.commit();
+                        
+                        // 2. Import new data
+                        const importBatch = window.firebase.writeBatch(db);
+                        data.forEach(item => {
+                            const { id, ...essayData } = item;
+                            const docRef = window.firebase.doc(db, 'essays', id);
+                            importBatch.set(docRef, essayData);
+                        });
+                        await importBatch.commit();
+
+                        showMessage('資料匯入成功！');
+                    } catch (err) {
+                        console.error("匯入失敗:", err);
+                        showMessage(`匯入失敗: ${err.message}`, true);
+                    } finally {
+                        showLoading(false);
+                    }
+                };
+                reader.readAsText(file);
+            };
+        };
+
+        const clearAllData = async () => {
+             showModal("確認清空所有資料", "<strong>極度危險操作！</strong>這將會永久刪除資料庫中所有的作文。此操作無法復原。<br><br>請在下方輸入 <strong>DELETE</strong> 以確認。", true);
+             modalActionContainer.innerHTML = `
+                <input type="text" id="delete-confirm-input" class="mt-4 block w-full rounded-md border-gray-300 shadow-sm" placeholder="DELETE">
+                <div class="flex justify-end space-x-3 mt-4">
+                    <button id="modal-cancel-clear-all" class="btn bg-gray-200 text-gray-800 hover:bg-gray-300">取消</button>
+                    <button id="modal-confirm-clear-all" class="btn bg-red-600 text-white hover:bg-red-700 disabled:bg-gray-400" disabled>確認清空</button>
+                </div>`;
+
+            const confirmInput = document.getElementById('delete-confirm-input');
+            const confirmBtn = document.getElementById('modal-confirm-clear-all');
+            
+            confirmInput.addEventListener('input', () => {
+                confirmBtn.disabled = confirmInput.value !== 'DELETE';
+            });
+
+            document.getElementById('modal-cancel-clear-all').onclick = closeModal;
+            document.getElementById('modal-confirm-clear-all').onclick = async () => {
+                closeModal();
+                showLoading(true, '正在清空所有資料...');
+                 try {
+                    const essaysCollection = window.firebase.collection(db, `essays`);
+                    const snapshot = await window.firebase.getDocs(essaysCollection);
+                    const batch = window.firebase.writeBatch(db);
+                    snapshot.docs.forEach(doc => {
+                        batch.delete(doc.ref);
+                    });
+                    await batch.commit();
+                    showMessage('所有資料已清空。');
+                 } catch (e) {
+                    console.error("清空失敗:", e);
+                    showMessage('清空資料時發生錯誤。', true);
+                 } finally {
+                    showLoading(false);
+                 }
+            };
+        };
+        
+        const showSettingsModal = () => {
+            const contentHtml = `
+                <div class="space-y-4 text-gray-700">
+                     <div class="flex items-center justify-between p-2 rounded-md hover:bg-gray-100">
+                        <label for="canViewOthersEssays" class="cursor-pointer">使用者能否觀看別人的作品</label>
+                        <input type="checkbox" id="canViewOthersEssays" class="form-checkbox h-5 w-5 text-blue-600 rounded cursor-pointer" ${appSettings.canViewOthersEssays ? 'checked' : ''}>
+                    </div>
+                    <div class="flex items-center justify-between p-2 rounded-md hover:bg-gray-100">
+                        <label for="allowAuthorDelete" class="cursor-pointer">作者能否刪除自己的文章 (批改前)</label>
+                        <input type="checkbox" id="allowAuthorDelete" class="form-checkbox h-5 w-5 text-blue-600 rounded cursor-pointer" ${appSettings.allowAuthorDelete ? 'checked' : ''}>
+                    </div>
+                    <div class="flex items-center justify-between p-2 rounded-md hover:bg-gray-100">
+                        <label for="allowEditBeforeCritique" class="cursor-pointer">批改前能否編輯文章</label>
+                        <input type="checkbox" id="allowEditBeforeCritique" class="form-checkbox h-5 w-5 text-blue-600 rounded cursor-pointer" ${appSettings.allowEditBeforeCritique ? 'checked' : ''}>
+                    </div>
+                    <div class="flex items-center justify-between p-2 rounded-md hover:bg-gray-100">
+                        <label for="allowEditAfterCritique" class="cursor-pointer">批改後能否編輯文章</label>
+                        <input type="checkbox" id="allowEditAfterCritique" class="form-checkbox h-5 w-5 text-blue-600 rounded cursor-pointer" ${appSettings.allowEditAfterCritique ? 'checked' : ''}>
+                    </div>
+                     <div class="flex items-center justify-between p-2 rounded-md hover:bg-gray-100">
+                        <label for="allowAuthorCritique" class="cursor-pointer">作者能否自行 AI 批改</label>
+                        <input type="checkbox" id="allowAuthorCritique" class="form-checkbox h-5 w-5 text-blue-600 rounded cursor-pointer" ${appSettings.allowAuthorCritique ? 'checked' : ''}>
+                    </div>
+                </div>
+            `;
+            showModal("管理員權限設定", contentHtml, true);
+            modalCloseBtn.style.display = 'none';
+            modalActionContainer.innerHTML = `
+                <div class="flex justify-end space-x-3 mt-6">
+                    <button id="modal-cancel-settings" class="btn bg-gray-200 text-gray-800 hover:bg-gray-300">取消</button>
+                    <button id="modal-save-settings" class="btn bg-blue-600 text-white hover:bg-blue-700">儲存設定</button>
+                </div>`;
+            
+            document.getElementById('modal-cancel-settings').onclick = closeModal;
+            document.getElementById('modal-save-settings').onclick = saveAppSettings;
+        };
+
+        const saveAppSettings = async () => {
+            const newSettings = {
+                canViewOthersEssays: document.getElementById('canViewOthersEssays').checked,
+                allowAuthorDelete: document.getElementById('allowAuthorDelete').checked,
+                allowEditBeforeCritique: document.getElementById('allowEditBeforeCritique').checked,
+                allowEditAfterCritique: document.getElementById('allowEditAfterCritique').checked,
+                allowAuthorCritique: document.getElementById('allowAuthorCritique').checked,
+            };
+            
+            showLoading(true, "正在儲存設定...");
+            try {
+                const settingsRef = window.firebase.doc(db, 'settings', 'permissions');
+                await window.firebase.setDoc(settingsRef, newSettings);
+                showMessage("設定已儲存！");
+                closeModal();
+            } catch (e) {
+                console.error("儲存設定失敗:", e);
+                showMessage("儲存設定失敗。", true);
+            } finally {
+                showLoading(false);
+            }
+        };
+
+
+        // --- 事件監聽器 ---
+        document.addEventListener('DOMContentLoaded', () => {
+            // -- Auth listeners --
+            const loginForm = document.getElementById('login-form');
+            const registerForm = document.getElementById('register-form');
+            document.getElementById('show-register-form').addEventListener('click', () => {
+                loginForm.style.display = 'none';
+                registerForm.style.display = 'block';
+            });
+            document.getElementById('show-login-form').addEventListener('click', () => {
+                loginForm.style.display = 'block';
+                registerForm.style.display = 'none';
+            });
+            document.getElementById('btn-login').addEventListener('click', async () => {
+                const email = document.getElementById('login-email').value;
+                const password = document.getElementById('login-password').value;
+                const errorP = document.getElementById('login-error');
+                const rememberMe = document.getElementById('remember-me').checked;
+                try {
+                    errorP.textContent = '';
+                    await window.firebase.signInWithEmailAndPassword(auth, email, password);
+                    if (rememberMe) {
+                        localStorage.setItem('essayPlatformEmail', email);
+                        localStorage.setItem('essayPlatformPass', btoa(password)); // Encode to base64
+                    } else {
+                        localStorage.removeItem('essayPlatformEmail');
+                        localStorage.removeItem('essayPlatformPass');
+                    }
+                } catch (error) {
+                    errorP.textContent = '登入失敗：' + error.message;
+                }
+            });
+            document.getElementById('btn-register').addEventListener('click', async () => {
+                const name = document.getElementById('register-name').value;
+                const email = document.getElementById('register-email').value;
+                const password = document.getElementById('register-password').value;
+                const errorP = document.getElementById('register-error');
+                if (!name) {
+                    errorP.textContent = '作者名稱不能為空。';
+                    return;
+                }
+                try {
+                    errorP.textContent = '';
+                    const userCredential = await window.firebase.createUserWithEmailAndPassword(auth, email, password);
+                    await window.firebase.updateProfile(userCredential.user, { displayName: name });
+                    // Auth state change will handle UI
+                } catch (error) {
+                    errorP.textContent = '註冊失敗：' + error.message;
+                }
+            });
+            document.getElementById('btn-logout').addEventListener('click', () => {
+                window.firebase.signOut(auth);
+            });
+
+            const savedEmail = localStorage.getItem('essayPlatformEmail');
+            const savedPass = localStorage.getItem('essayPlatformPass');
+            if (savedEmail && savedPass) {
+                document.getElementById('login-email').value = savedEmail;
+                document.getElementById('login-password').value = atob(savedPass);
+                document.getElementById('remember-me').checked = true;
+            }
+
+            // -- App listeners --
+            document.getElementById('btn-create-new').addEventListener('click', showCreateEssayModal);
+            document.getElementById('btn-back-to-home').addEventListener('click', async () => {
+                if (canEditCurrentEssay) {
+                    await saveEssay();
+                }
+                showHomePage();
+            });
+            document.getElementById('btn-save').addEventListener('click', saveEssay);
+            document.getElementById('btn-undo').addEventListener('click', window.undoAction);
+            document.getElementById('btn-redo').addEventListener('click', window.redoAction);
+            document.querySelectorAll('.btn-page').forEach(btn => btn.addEventListener('click', () => changePage(parseInt(btn.dataset.page))));
+            document.getElementById('btn-clear').addEventListener('click', clearCurrentPageContent);
+            document.getElementById('btn-ai-critique').addEventListener('click', generateAiCritique);
+            const fileInput = document.getElementById('file-input');
+            document.getElementById('btn-upload-file').addEventListener('click', () => fileInput.click());
+            fileInput.addEventListener('change', handleFileUpload);
+            
+            // -- Admin listeners --
+            const importFileInput = document.getElementById('import-file-input');
+            document.getElementById('btn-import').addEventListener('click', () => importFileInput.click());
+            importFileInput.addEventListener('change', (e) => {
+                const file = e.target.files[0];
+                if (file) importData(file);
+                e.target.value = ''; // Reset input
+            });
+            document.getElementById('btn-export').addEventListener('click', exportData);
+            document.getElementById('btn-clear-all').addEventListener('click', clearAllData);
+            document.getElementById('btn-settings').addEventListener('click', showSettingsModal);
+            
+            initializeAppAndAuth();
+        });
+    </script>
+</body>
+</html>
+
